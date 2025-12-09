@@ -13,13 +13,12 @@ CORS(app)
 
 # Answers list to match the frontend
 ANSWERS = [
-    "piano",
-    "water",
-    "clock",
-    "towel",
-    "your name",
-    "bottle",
-    "egg",
+    "TQRG",
+    "Sunday",
+    "Maggi",
+    "Ottawa",
+    "modi and putin",
+    "Battery",
     "map",
     "future",
     "age",
@@ -151,3 +150,4 @@ if __name__ == "__main__":
     # Use PORT environment variable if set, otherwise default to 5000
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+    
