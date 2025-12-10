@@ -9,24 +9,23 @@ from flask_cors import CORS
 load_dotenv()
 
 app = Flask(__name__, template_folder='templates')
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})  # More permissive CORS
 
 # Answers list to match the frontend
 ANSWERS = [
-    "TQRG",
-    "Sunday",
-    "Maggi",
-    "Ottawa",
-    "modi and putin",
-    "Battery",
-    "map",
-    "future",
-    "age",
-    "cold",
-    "needle",
-    "hole",
-    "stamp",
-    "rubber band"
+  "DTCLV",
+  "159",
+  "98",
+  "TQRG",
+  "Sunday",
+  "Maggi",
+  "Ottawa",
+  "Modi & Putin",
+  "Battery",
+  "147",
+  "YA",
+  "34",
+  "32U65"
 ]
 
 # Retrieve Gemini API key from environment variable or .env file
@@ -109,11 +108,28 @@ Guidelines:
 
     # Fallback if all attempts fail
     return correct_answer.lower().strip() == user_answer.lower().strip()
-@app.route("/")
+
+# Add a simple health check route
+@app.route("/", methods=["GET"])
 def home():
-    return render_template("index.html")
-@app.route("/check_answer", methods=["POST"])
+    return jsonify({"status": "ok", "message": "Quiz backend is running"})
+
+# Add a route to get the list of answers (for debugging)
+@app.route("/answers", methods=["GET"])
+def get_answers():
+    return jsonify({"answers": ANSWERS})
+
+@app.route("/check_answer", methods=["POST", "OPTIONS"])
 def check_answer():
+    # Handle CORS preflight request
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+
+    # Log the incoming request details
+    print("Received request:")
+    print("Headers:", request.headers)
+    print("Body:", request.get_json())
+
     data = request.get_json()
     correct_answer = data.get("correctAnswer", "")
     user_answer = data.get("userAnswer", "")
@@ -127,18 +143,33 @@ def check_answer():
         
         # Validate question index is within range
         if question_index < 0 or question_index >= len(ANSWERS):
+            print(f"Invalid question number: {question_number}")
             return jsonify({"correct": False, "error": "Invalid question number"}), 400
         
-        # Verify the correct answer matches the expected answer for this question
+        # Get the expected answer
         expected_answer = ANSWERS[question_index]
-        if correct_answer.lower().strip() != expected_answer:
-            return jsonify({"correct": False, "error": "Incorrect answer for this question"}), 400
+        print(f"Expected Answer: {expected_answer}")
+        print(f"User Answer: {user_answer}")
         
-        # Validate the user's answer using Gemini
-        is_correct = validate_answer_with_gemini(correct_answer, user_answer)
+        # Validate the user's answer
+        # First, try a simple case-insensitive match
+        if user_answer.lower().strip() == expected_answer.lower().strip():
+            print("Answer matched exactly")
+            return jsonify({"correct": True})
         
-        return jsonify({"correct": is_correct})
-    except (ValueError, TypeError):
+        # If Gemini API key is set, use Gemini for more flexible validation
+        if GEMINI_API_KEY:
+            # Validate the user's answer using Gemini
+            is_correct = validate_answer_with_gemini(expected_answer, user_answer)
+            print(f"Gemini validation result: {is_correct}")
+            return jsonify({"correct": is_correct})
+        
+        # If no Gemini API key, fall back to simple validation
+        print("No Gemini API key, returning False")
+        return jsonify({"correct": False})
+    
+    except (ValueError, TypeError) as e:
+        print(f"Error processing request: {e}")
         return jsonify({"correct": False, "error": "Invalid question number"}), 400
 
 # Modify to use environment variable for port
@@ -149,5 +180,4 @@ if __name__ == "__main__":
     
     # Use PORT environment variable if set, otherwise default to 5000
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
-    
+    app.run(host='0.0.0.0', port=port, debug=True)  # Changed to debug mode
