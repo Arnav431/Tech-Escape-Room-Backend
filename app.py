@@ -1,183 +1,111 @@
 import os
-from dotenv import load_dotenv
-import requests
 import time
-from flask import Flask, request, jsonify, render_template
+import requests
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Load .env file if it exists (will not override existing env vars)
 load_dotenv()
 
-app = Flask(__name__, template_folder='templates')
-CORS(app, resources={r"/*": {"origins": "*"}})  # More permissive CORS
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Answers list to match the frontend
 ANSWERS = [
-  "DTCLV",
-  "159",
-  "98",
-  "TQRG",
-  "Sunday",
-  "Maggi",
-  "Ottawa",
-  "Modi & Putin",
-  "Battery",
-  "147",
-  "YA",
-  "34",
-  "32U65"
+    "DTCLV",
+    "159",
+    "98",
+    "TQRG",
+    "Sunday",
+    "Maggi",
+    "Ottawa",
+    "Modi & Putin",
+    "Battery",
+    "147",
+    "YA",
+    "34",
+    "32U65"
 ]
 
-# Retrieve Gemini API key from environment variable or .env file
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_KEYS = [
+    os.environ.get("GEMINI_API_KEY"),
+    os.environ.get("GEMINI_API_KEY_2")
+]
 
-# Rate limiting configuration
-MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds between retries
-RATE_LIMIT_DELAY = 60  # seconds to wait after hitting rate limit
+MODEL = "gemini-2.5-flash"
 
-def validate_answer_with_gemini(correct_answer, user_answer):
-    """
-    Use Gemini API to validate the answer with more flexibility
-    Implements retry and rate limit handling
-    """
-    if not GEMINI_API_KEY:
-        # Fallback to simple validation if no API key
-        return correct_answer.lower().strip() == user_answer.lower().strip()
+def gemini_url(key):
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={key}"
 
+def validate_with_gemini(correct, user):
     prompt = f'''
-You are an answer validator. Compare the correct answer and the user answer.
-Determine if the user's answer is essentially correct, allowing for:
-- Slight spelling variations
-- Plural/singular forms
-- Minor grammatical differences
-- Close semantic matches
-
 Respond ONLY with YES or NO.
 
-Correct Answer: "{correct_answer}"
-User Answer: "{user_answer}"
-
-Guidelines:
-- Be lenient with minor variations
-- Consider semantic similarity
-- If the meaning is essentially the same, respond YES
+Correct Answer: "{correct}"
+User Answer: "{user}"
 '''
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
     }
 
-    for attempt in range(MAX_RETRIES):
+    for key in GEMINI_KEYS:
+        if not key:
+            continue
         try:
-            # Make request to Gemini API
-            resp = requests.post(
-                GEMINI_API_URL, 
-                json=payload, 
-                headers={"Content-Type": "application/json"}
+            r = requests.post(
+                gemini_url(key),
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10
             )
-
-            # Handle specific HTTP status codes
-            if resp.status_code == 429:
-                # Rate limit hit
-                print(f"Rate limit reached. Waiting {RATE_LIMIT_DELAY} seconds.")
-                time.sleep(RATE_LIMIT_DELAY)
+            if r.status_code == 429:
+                time.sleep(2)
                 continue
-            
-            resp.raise_for_status()
-            
-            # Extract and process Gemini's response
-            gemini_data = resp.json()
-            text = gemini_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip().lower()
-            
-            # Check if the response starts with "yes"
-            return text == "yes" or text.startswith("yes")
-        
-        except requests.exceptions.RequestException as e:
-            # Log the error
-            print(f"Gemini API error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
-            
-            # Wait before retrying
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY)
-            else:
-                # Fallback to simple validation if all retries fail
-                print("All Gemini API attempts failed. Falling back to simple validation.")
-                return correct_answer.lower().strip() == user_answer.lower().strip()
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"].lower()
+            return text.startswith("yes")
+        except:
+            continue
 
-    # Fallback if all attempts fail
-    return correct_answer.lower().strip() == user_answer.lower().strip()
+    return correct.lower().strip() == user.lower().strip()
 
-# Add a simple health check route
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "ok", "message": "Quiz backend is running"})
+    return jsonify({"status": "ok"})
 
-# Add a route to get the list of answers (for debugging)
-@app.route("/answers", methods=["GET"])
-def get_answers():
-    return jsonify({"answers": ANSWERS})
-
-@app.route("/check_answer", methods=["POST", "OPTIONS"])
+@app.route("/check_answer", methods=["POST"])
 def check_answer():
-    # Handle CORS preflight request
-    if request.method == 'OPTIONS':
-        return jsonify({"status": "ok"}), 200
-
-    # Log the incoming request details
-    print("Received request:")
-    print("Headers:", request.headers)
-    print("Body:", request.get_json())
-
     data = request.get_json()
-    correct_answer = data.get("correctAnswer", "")
-    user_answer = data.get("userAnswer", "")
-    
-    # Get the question number from the request, defaulting to 1 if not provided
-    question_number = data.get("questionNumber", 1)
-    
-    try:
-        # Adjust for 0-based indexing
-        question_index = int(question_number) - 1
-        
-        # Validate question index is within range
-        if question_index < 0 or question_index >= len(ANSWERS):
-            print(f"Invalid question number: {question_number}")
-            return jsonify({"correct": False, "error": "Invalid question number"}), 400
-        
-        # Get the expected answer
-        expected_answer = ANSWERS[question_index]
-        print(f"Expected Answer: {expected_answer}")
-        print(f"User Answer: {user_answer}")
-        
-        # Validate the user's answer
-        # First, try a simple case-insensitive match
-        if user_answer.lower().strip() == expected_answer.lower().strip():
-            print("Answer matched exactly")
-            return jsonify({"correct": True})
-        
-        # If Gemini API key is set, use Gemini for more flexible validation
-        if GEMINI_API_KEY:
-            # Validate the user's answer using Gemini
-            is_correct = validate_answer_with_gemini(expected_answer, user_answer)
-            print(f"Gemini validation result: {is_correct}")
-            return jsonify({"correct": is_correct})
-        
-        # If no Gemini API key, fall back to simple validation
-        print("No Gemini API key, returning False")
-        return jsonify({"correct": False})
-    
-    except (ValueError, TypeError) as e:
-        print(f"Error processing request: {e}")
-        return jsonify({"correct": False, "error": "Invalid question number"}), 400
+    meth = None
+    qn = int(data.get("questionNumber", 1)) - 1
+    if qn < 0 or qn >= len(ANSWERS):
+        print({"error": "Invalid question number", "question": qn + 1})
+        return jsonify({"correct": False}), 400
+    correct = ANSWERS[qn]
+    user = data.get("userAnswer", "")
 
-# Modify to use environment variable for port
+    if user.lower().strip() == correct.lower().strip():
+        meth = "default"
+        print({
+            "question": f"Q{qn+1}",
+            "correct": correct,
+            "user": user,
+            "method": meth,
+            "result": True
+        })
+        return jsonify({"correct": True})
+    result = validate_with_gemini(correct, user)
+    meth = "gemini"
+
+    print({
+        "question": f"Q{qn+1}",
+        "correct": correct,
+        "user": user,
+        "method": meth,
+        "result": result
+    })
+    return jsonify({"correct": result})
+
 if __name__ == "__main__":
-    # Check if API key is set
-    if not GEMINI_API_KEY:
-        print("WARNING: GEMINI_API_KEY is not set. Answer validation will be basic.")
-    
-    # Use PORT environment variable if set, otherwise default to 5000
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)  # Changed to debug mode
+    app.run(host="0.0.0.0", port=port)
